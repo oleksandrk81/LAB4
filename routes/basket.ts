@@ -4,34 +4,32 @@
  */
 
 import { type Request, type Response, type NextFunction } from 'express'
-import { ProductModel } from '../models/product'
 import { BasketModel } from '../models/basket'
-import * as challengeUtils from '../lib/challengeUtils'
-
-import * as utils from '../lib/utils'
 import * as security from '../lib/insecurity'
-import { challenges } from '../data/datacache'
+import * as utils from '../lib/utils'
 
 export function retrieveBasket () {
-  return async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const id = req.params.id
-      const basket = await BasketModel.findOne({ where: { id }, include: [{ model: ProductModel, paranoid: false, as: 'Products' }] })
-      /* jshint eqeqeq:false */
-      challengeUtils.solveIf(challenges.basketAccessChallenge, () => {
-        const user = security.authenticatedUsers.from(req)
-        const isValidId = id && id !== 'undefined' && id !== 'null' && id !== 'NaN'
-        return user && isValidId && user.bid && user?.bid != parseInt(id, 10) // eslint-disable-line eqeqeq
-      })
-      if (((basket?.Products) != null) && basket.Products.length > 0) {
-        for (let i = 0; i < basket.Products.length; i++) {
-          basket.Products[i].name = req.__(basket.Products[i].name)
-        }
-      }
+  return (req: Request, res: Response, next: NextFunction) => {
+    const id = req.params.id
+    const authenticatedUser = security.authenticatedUsers.get(req.headers.authorization?.replace('Bearer ', ''))
 
-      res.json(utils.queryResultToJson(basket))
-    } catch (error) {
-      next(error)
+    if (!authenticatedUser) {
+      return res.status(401).send('Unauthenticated')
     }
+
+    // Проверяем, принадлежит ли запрашиваемая корзина текущему пользователю
+    BasketModel.findOne({ where: { id, UserId: authenticatedUser.data.id } })
+      .then((basket: BasketModel | null) => {
+        if (basket) {
+          // Возвращаем корзину в стандартном формате, который ожидает фронтенд
+          res.json(utils.queryResultToJson(basket))
+        } else {
+          // Если корзина принадлежит другому пользователю — отказываем в доступе
+          res.status(403).send('Access denied')
+        }
+      })
+      .catch((error: Error) => {
+        next(error)
+      })
   }
 }
